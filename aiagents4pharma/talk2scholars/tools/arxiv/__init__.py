@@ -4,5 +4,4 @@
 Import statements
 '''
 
-from . import s2
-from . import arxiv
+from . import download_pdf_arxivX

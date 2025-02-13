@@ -1,0 +1,3 @@
+# configs/tools/download_pdf_arxiv/default.yaml
+api_url: "http://export.arxiv.org/api/query"
+request_timeout: 10
