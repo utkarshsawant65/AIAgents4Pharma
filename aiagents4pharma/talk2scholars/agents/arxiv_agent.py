@@ -1,93 +1,54 @@
 #!/usr/bin/env python3
-"""
-Agent for interacting with arXiv papers.
-"""
 
-import os
 import logging
-import yaml  # Ensure pyyaml is installed: pip install pyyaml
+import hydra
 from langchain_openai import ChatOpenAI
+from langgraph.types import Command
 from langgraph.graph import START, StateGraph
 from langgraph.prebuilt import create_react_agent, ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 from ..state.state_talk2scholars import Talk2Scholars
 from ..tools.arxiv.download_pdf_arxivX import fetch_arxiv_paper
 
-# Initialize logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def load_config() -> dict:
+def agent_arxiv_node(state: Talk2Scholars):
     """
-    Loads the agent configuration from the YAML file located at:
-    configs/agents/talk2scholars/arxiv_agent/default.yaml
+    Fetches the arXiv paper using the paper ID extracted from state.
     """
-    # Compute the path relative to this file's location.
-    config_path = os.path.join(
-        os.path.dirname(__file__),
-        "../configs/agents/talk2scholars/arxiv_agent/default.yaml"
-    )
-    try:
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
-            if config is None:
-                raise ValueError("Config file is empty.")
-            return config
-    except Exception as e:
-        logger.error("Failed to load configuration: %s", str(e))
-        # Fallback default configuration
-        return {
-            "temperature": 0.7,
-            "arxiv_agent": {
-                "system_prompt": "Default system prompt for arxiv agent."
-            }
-        }
+    logger.info("Agent Arxiv received state: %s", state)
 
-# Load configuration from the YAML file.
-CONFIG = load_config()
+    paper_id = state.get("paper_id", None)
+    if not paper_id:
+        error_message = "No valid paper ID found in state."
+        logger.error(error_message)
+        return Command(update={"error": error_message})
 
-def get_app(uniq_id, llm_model="gpt-4o-mini"):
-    """
-    Returns the LangGraph app for agent_arxiv.
-    This app is integrated as a sub-agent of the main agent (talk2scholars).
-    """
+    logger.info("Fetching arXiv paper with ID: %s", paper_id)
 
-    def agent_arxiv_node(state: Talk2Scholars):
-        """
-        Node function for agent_arxiv that invokes the model with the current state.
-        """
-        logger.info("Creating agent_arxiv node with thread_id %s", uniq_id)
-        # Pass the unique thread id and other configuration if needed.
-        response = model.invoke(state, {"configurable": {"thread_id": uniq_id}})
-        return response
+    response = fetch_arxiv_paper.invoke({"paper_id": paper_id, "tool_call_id": "arxiv_fetch_1"})
 
-    # Define the tool node with the fetch_arxiv_paper tool.
+    if "error" in response:
+        logger.error("Failed to fetch arXiv paper: %s", response["error"])
+        return Command(update={"error": response["error"], "suggestion": "Try another paper ID."})
+
+    return Command(update=response)
+
+
+def get_app(thread_id, llm_model="gpt-4o-mini"):
+    with hydra.initialize(version_base=None, config_path="../../configs"):
+        cfg = hydra.compose(
+            config_name="config", overrides=["agents/talk2scholars/arxiv_agent=default"]
+        )
+        cfg = cfg.agents.talk2scholars.arxiv_agent
+
     tools = ToolNode([fetch_arxiv_paper])
+    llm = ChatOpenAI(model=llm_model, temperature=cfg.temperature)
 
-    # Initialize the LLM using ChatOpenAI with the temperature from the configuration.
-    logger.info("Using OpenAI model %s", llm_model)
-    llm = ChatOpenAI(model=llm_model, temperature=CONFIG.get("temperature", 0.7))
-
-    # Create the agent using create_react_agent.
-    # The state_modifier now comes from the configuration loaded from YAML,
-    # which includes your system prompt.
-    model = create_react_agent(
-        llm,
-        tools=tools,
-        state_schema=Talk2Scholars,
-        state_modifier=CONFIG.get("arxiv_agent", {}),
-        checkpointer=MemorySaver(),
-    )
-
-    # Build the state graph that defines the workflow.
     workflow = StateGraph(Talk2Scholars)
     workflow.add_node("agent_arxiv", agent_arxiv_node)
     workflow.add_edge(START, "agent_arxiv")
 
-    # Initialize memory to persist state between graph runs.
-    checkpointer = MemorySaver()
-
-    # Compile the graph into a runnable LangChain app.
-    app = workflow.compile(checkpointer=checkpointer)
-    logger.info("Compiled the graph for agent_arxiv.")
+    app = workflow.compile(checkpointer=MemorySaver())
     return app

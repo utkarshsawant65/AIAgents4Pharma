@@ -8,3 +8,14 @@ pydantic==2.10.5
 requests==2.32.3
 streamlit==1.41.1
 tabulate==0.9.0
+requests
+pandas
+openai
+langchain_openai
+langgraph
+typing_extensions
+capture
+langchain_community 
+langchain_anthropic 
+langchain_experimental
+hydra-core
