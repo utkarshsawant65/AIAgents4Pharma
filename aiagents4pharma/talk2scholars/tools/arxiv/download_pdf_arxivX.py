@@ -36,7 +36,6 @@ with hydra.initialize(version_base=None, config_path="../../configs"):
     REQUEST_TIMEOUT = cfg.tools.download_pdf_arxiv.request_timeout
 
 
-
 @tool(args_schema=FetchArxivPaperInput)
 def fetch_arxiv_paper(arxiv_id: str, tool_call_id: str) -> Dict[str, Any]:
     """
@@ -92,34 +91,20 @@ def fetch_arxiv_paper(arxiv_id: str, tool_call_id: str) -> Dict[str, Any]:
     )
 
 
-if __name__ == "__main__":
-    # Simulated state: a dictionary of filtered papers.
-    # Each paper is stored with details including an "arXiv ID".
-    filtered_papers = {
-        "paper1": {
-            "Title": "Example Title",
-            "Abstract": "Example Abstract",
-            "Year": "2020",
-            "Citation Count": "15",
-            "URL": "http://example.com",
-            "arXiv ID": "1905.02244"
-        },
-        # Additional papers could be added here.
-    }
+def prepare_tool_input(filtered_papers: Dict[str, Any], paper_key: str, tool_call_id: str) -> Dict[str, str]:
+    """
+    Extracts the arXiv ID from the filtered papers state and prepares the input
+    for the fetch_arxiv_paper tool.
 
-    # Extract the arXiv ID from the state. For instance, we use the paper with key "paper1".
-    arxiv_id = filtered_papers["paper1"]["arXiv ID"]
+    Args:
+        filtered_papers (Dict[str, Any]): The state dictionary containing paper data.
+        paper_key (str): The key for the paper whose arXiv ID should be extracted.
+        tool_call_id (str): The unique tool call identifier.
 
-    # Prepare the input for the tool.
-    test_input = {
-        "arxiv_id": arxiv_id,
-        "tool_call_id": "test123"
-    }
-    
-    # Run the tool using the invoke method.
-    result = fetch_arxiv_paper.invoke(test_input)
-    
-    # Display the results.
-    print("PDF Object (first 100 bytes):", result.update["pdf_object"][:100])
-    for msg in result.update["messages"]:
-        print("Tool Message:", msg.content)
+    Returns:
+        Dict[str, str]: A dictionary with 'arxiv_id' and 'tool_call_id' for tool invocation.
+    """
+    arxiv_id = filtered_papers.get(paper_key, {}).get("arXiv ID", None)
+    if not arxiv_id or arxiv_id == "N/A":
+        raise ValueError(f"Invalid or missing arXiv ID for paper key: {paper_key}")
+    return {"arxiv_id": arxiv_id, "tool_call_id": tool_call_id}
