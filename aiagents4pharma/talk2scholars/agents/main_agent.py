@@ -10,9 +10,8 @@ for multi-agent systems and implements proper state management.
 The main components are:
 1. Supervisor node with ReAct pattern for intelligent routing.
 2. S2 agent node for handling academic paper queries.
-3. Agent Arxiv node for downloading papers from arXiv.
-4. Shared state management via Talk2Scholars.
-5. Hydra-based configuration system.
+3. Shared state management via Talk2Scholars.
+4. Hydra-based configuration system.
 
 Example:
     app = get_app("thread_123", "gpt-4o-mini")
@@ -30,7 +29,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command
-from ..agents import s2_agent, arxiv_agent
+from ..agents import s2_agent
 from ..state.state_talk2scholars import Talk2Scholars
 
 # Configure logging
@@ -87,38 +86,39 @@ def make_supervisor_node(llm: BaseChatModel, thread_id: str) -> Callable:
         checkpointer=MemorySaver(),
     )
 
-    def supervisor_node(state: Talk2Scholars) -> Command[Literal["s2_agent", "agent_arxiv", "__end__"]]:
+    def supervisor_node(
+        state: Talk2Scholars,
+    ) -> Command[Literal["s2_agent", "__end__"]]:
         """
-        Uses LLM to determine whether to route the query to:
-        - `s2_agent` (finding papers)
-        - `agent_arxiv` (downloading a specific paper).
+        Processes user queries and determines the next step in the conversation flow.
+
+        This function examines the conversation state and decides whether to forward
+        the query to a specialized sub-agent (e.g., S2 agent) or conclude the interaction.
+
+        Args:
+            state (Talk2Scholars): The current state of the conversation, containing
+                messages, papers, and metadata.
+
+        Returns:
+            Command: The next action to be executed, along with updated state data.
+
+        Example:
+            result = supervisor_node(current_state)
+            next_step = result.goto
         """
-
-        user_query = state["messages"][-1] if state["messages"] else ""
-        logger.info("Supervisor received query: %s", user_query)
-
-        # LLM Prompt for Routing Decision
-        prompt = (
-            f"You are an AI research assistant routing user queries.\n"
-            f"User query: \"{user_query}\"\n"
-            f"Decide the correct action:\n"
-            f"A) Send to `s2_agent` for finding research papers.\n"
-            f"B) Send to `agent_arxiv` for downloading a specific paper.\n"
-            f"Reply with only 'A' or 'B' (no explanations)."
+        logger.info(
+            "Supervisor node called - Messages count: %d",
+            len(state["messages"]),
         )
 
-        # Invoke LLM to decide routing
-        llm_response = llm.invoke(prompt).strip().upper()
+        # Invoke the supervisor agent with configurable thread_id
+        result = supervisor_agent.invoke(
+            state, {"configurable": {"thread_id": thread_id}}
+        )
+        goto = "s2_agent"
+        logger.info("Supervisor agent completed with result: %s", result)
 
-        if llm_response == "A":
-            logger.info("LLM decided: Route to s2_agent")
-            return Command(goto="s2_agent")
-        elif llm_response == "B":
-            logger.info("LLM decided: Route to agent_arxiv")
-            return Command(goto="agent_arxiv")
-        else:
-            logger.error("LLM could not determine the correct action.")
-            return Command(update={"error": "I couldn't determine the correct action. Please rephrase your request."})
+        return Command(goto=goto)
 
     return supervisor_node
 
@@ -143,9 +143,11 @@ def get_app(thread_id: str, llm_model: str = "gpt-4o-mini") -> StateGraph:
     """
     cfg = get_hydra_config()
 
-    def call_s2_agent(state: Talk2Scholars) -> Command[Literal["supervisor", "__end__"]]:
+    def call_s2_agent(
+        state: Talk2Scholars,
+    ) -> Command[Literal["supervisor", "__end__"]]:
         """
-        Calls the S2 agent to fetch recommended papers.
+        Calls the Semantic Scholar (S2) agent to process academic paper queries.
 
         This function invokes the S2 agent, retrieves relevant research papers,
         and updates the conversation state accordingly.
@@ -156,20 +158,35 @@ def get_app(thread_id: str, llm_model: str = "gpt-4o-mini") -> StateGraph:
 
         Returns:
             Command: The next action to execute, along with updated messages and papers.
-        """
-        logger.info("Calling S2 agent")
-        app = s2_agent.get_app(thread_id, llm_model)
-        response = app.invoke(state, {"configurable": {"thread_id": thread_id}})
-        return Command(goto=END, update={"papers": response.get("papers", [])})
 
-    def call_agent_arxiv(state: Talk2Scholars) -> Command[Literal["supervisor", "__end__"]]:
+        Example:
+            result = call_s2_agent(current_state)
+            next_step = result.goto
         """
-        Calls `agent_arxiv` to fetch an arXiv paper.
-        """
-        logger.info("Calling Agent Arxiv")
-        app = agent_arxiv.get_app(thread_id, llm_model)
-        response = app.invoke(state, {"configurable": {"thread_id": thread_id}})
-        return Command(goto=END, update=response)
+        logger.info("Calling S2 agent with state: %s", state)
+        app = s2_agent.get_app(thread_id, llm_model)
+
+        # Invoke the S2 agent, passing state,
+        # Pass both config_id and thread_id
+        response = app.invoke(
+            state,
+            {
+                "configurable": {
+                    "config_id": thread_id,
+                    "thread_id": thread_id,
+                }
+            },
+        )
+        logger.info("S2 agent completed with response: %s", response)
+
+        return Command(
+            goto=END,
+            update={
+                "messages": response["messages"],
+                "papers": response.get("papers", {}),
+                "multi_papers": response.get("multi_papers", {}),
+            },
+        )
 
     # Initialize LLM
     logger.info("Using OpenAI model %s with temperature %s", llm_model, cfg.temperature)
@@ -181,13 +198,10 @@ def get_app(thread_id: str, llm_model: str = "gpt-4o-mini") -> StateGraph:
 
     workflow.add_node("supervisor", supervisor)
     workflow.add_node("s2_agent", call_s2_agent)
-    workflow.add_node("agent_arxiv", call_agent_arxiv)
-
     workflow.add_edge(START, "supervisor")
     workflow.add_edge("s2_agent", END)
-    workflow.add_edge("agent_arxiv", END)
 
-    # Compile the graph
+    # Compile the graph without initial state
     app = workflow.compile(checkpointer=MemorySaver())
-    logger.info("Main agent workflow compiled with LLM-based routing")
+    logger.info("Main agent workflow compiled")
     return app

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
 """
-This tool is used to search for academic papers on Semantic Scholar.
+This tool is used to search for academic papers on Semantic Scholar, 
+including metadata such as title, abstract, year, citation count, URL, and arXiv ID.
 """
 
 import logging
 from typing import Annotated, Any, Dict, Optional
 import hydra
-import pandas as pd
 import requests
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
@@ -15,13 +15,17 @@ from langchain_core.tools.base import InjectedToolCallId
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 class SearchInput(BaseModel):
     """Input schema for the search papers tool."""
 
     query: str = Field(
         description="Search query string to find academic papers."
-        "Be specific and include relevant academic terms."
+        " Be specific and include relevant academic terms."
     )
     limit: int = Field(
         default=2, description="Maximum number of results to return", ge=1, le=100
@@ -34,7 +38,7 @@ class SearchInput(BaseModel):
     tool_call_id: Annotated[str, InjectedToolCallId]
 
 
-# Load hydra configuration
+# Load Hydra configuration
 with hydra.initialize(version_base=None, config_path="../../configs"):
     cfg = hydra.compose(config_name="config", overrides=["tools/search=default"])
     cfg = cfg.tools.search
@@ -58,16 +62,14 @@ def search_tool(
         Supports formats like "2024-", "-2024", "2024:2025". Defaults to None.
 
     Returns:
-        Dict[str, Any]: The search results and related information.
+        Dict[str, Any]: The search results including title, abstract, citation count, URL, and arXiv ID.
     """
-    print("Starting paper search...")
+    logger.info("Starting paper search...")
     endpoint = cfg.api_endpoint
     params = {
         "query": query,
         "limit": min(limit, 100),
-        # "fields": "paperId,title,abstract,year,authors,
-        # citationCount,url,publicationTypes,openAccessPdf",
-        "fields": ",".join(cfg.api_fields),
+        "fields": "paperId,title,abstract,year,citationCount,url,externalIds",
     }
 
     # Add year parameter if provided
@@ -78,6 +80,8 @@ def search_tool(
     data = response.json()
     papers = data.get("data", [])
 
+    logger.info("Received %d papers", len(papers))
+
     # Create a dictionary to store the papers
     filtered_papers = {
         paper["paperId"]: {
@@ -86,40 +90,21 @@ def search_tool(
             "Year": paper.get("year", "N/A"),
             "Citation Count": paper.get("citationCount", "N/A"),
             "URL": paper.get("url", "N/A"),
-            # "Publication Type": paper.get("publicationTypes", ["N/A"])[0]
-            # if paper.get("publicationTypes")
-            # else "N/A",
-            # "Open Access PDF": paper.get("openAccessPdf", {}).get("url", "N/A")
-            # if paper.get("openAccessPdf") is not None
-            # else "N/A",
+            "arXiv ID": paper.get("externalIds", {}).get("ArXiv", "N/A"),  # Extract arXiv ID
         }
         for paper in papers
         if paper.get("title") and paper.get("authors")
     }
 
-    df = pd.DataFrame(filtered_papers)
-
-    # Format papers for state update
-    papers = [
-        f"Paper ID: {paper_id}\n"
-        f"Title: {paper_data['Title']}\n"
-        f"Abstract: {paper_data['Abstract']}\n"
-        f"Year: {paper_data['Year']}\n"
-        f"Citations: {paper_data['Citation Count']}\n"
-        f"URL: {paper_data['URL']}\n"
-        # f"Publication Type: {paper_data['Publication Type']}\n"
-        # f"Open Access PDF: {paper_data['Open Access PDF']}"
-        for paper_id, paper_data in filtered_papers.items()
-    ]
-
-    markdown_table = df.to_markdown(tablefmt="grid")
-    logging.info("Search results: %s", papers)
-
     return Command(
         update={
             "papers": filtered_papers,  # Now sending the dictionary directly
             "messages": [
-                ToolMessage(content=markdown_table, tool_call_id=tool_call_id)
+                ToolMessage(
+                    content=f"Search Successful: {filtered_papers}",
+                    tool_call_id=tool_call_id
+                )
             ],
         }
     )
+ 

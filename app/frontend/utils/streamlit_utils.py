@@ -4,17 +4,32 @@
 Utils for Streamlit.
 '''
 
+import os
+import datetime
+import hydra
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.express as px
 from langsmith import Client
+from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
+from langchain_nvidia_ai_endpoints import ChatNVIDIA, NVIDIAEmbeddings
+from langchain_openai.embeddings import OpenAIEmbeddings
+from langchain_core.language_models import BaseChatModel
+from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessageChunk, HumanMessage, ChatMessage, AIMessage
 from langchain_core.tracers.context import collect_runs
 from langchain.callbacks.tracers import LangChainTracer
+import networkx as nx
+import gravis
 
 def submit_feedback(user_response):
     '''
     Function to submit feedback to the developers.
+
+    Args:
+        user_response: dict: The user response
     '''
     client = Client()
     client.create_feedback(
@@ -69,6 +84,12 @@ def render_toggle(key: str,
                   save_toggle: bool = False):
     """
     Function to render the toggle button to show/hide the table.
+
+    Args:
+        key: str: The key for the toggle button
+        toggle_text: str: The text for the toggle button
+        toggle_state: bool: The state of the toggle button
+        save_toggle: bool: Flag to save the toggle button to the chat history
     """
     st.toggle(
         toggle_text,
@@ -89,7 +110,6 @@ def render_toggle(key: str,
 def render_plotly(df: pd.DataFrame,
                 key: str,
                 title: str,
-                # tool_name: str,
                 save_chart: bool = False
                 ):
     """
@@ -97,6 +117,9 @@ def render_plotly(df: pd.DataFrame,
 
     Args:
         df: pd.DataFrame: The input dataframe
+        key: str: The key for the plotly chart
+        title: str: The title of the plotly chart
+        save_chart: bool: Flag to save the chart to the chat history
     """
     # toggle_state = st.session_state[f'toggle_plotly_{tool_name}_{key.split("_")[-1]}']\
     toggle_state = st.session_state[f'toggle_plotly_{key.split("plotly_")[1]}']
@@ -128,12 +151,16 @@ def render_plotly(df: pd.DataFrame,
             })
 
 def render_table(df: pd.DataFrame,
-                #  tool_name: str,
                  key: str,
                  save_table: bool = False
                 ):
     """
     Function to render the table in the chat.
+
+    Args:
+        df: pd.DataFrame: The input dataframe
+        key: str: The key for the table
+        save_table: bool: Flag to save the table to the chat history
     """
     # print (st.session_state['toggle_simulate_model_'+key.split("_")[-1]])
     # toggle_state = st.session_state[f'toggle_table_{tool_name}_{key.split("_")[-1]}']
@@ -151,16 +178,10 @@ def render_table(df: pd.DataFrame,
                 # "tool_name": tool_name
             })
 
-def stream_response(response):
-    for chunk in response:
-        if not isinstance(chunk[0], AIMessageChunk):
-            # print (chunk)
-            continue
-        # print (chunk)
-        if 'branch:agent:should_continue:tools' not in chunk[1]['langgraph_triggers']:
-            yield chunk[0].content
-
 def sample_questions():
+    """
+    Function to get the sample questions.
+    """
     questions = [
         "Search for all the BioModels on Crohn's Disease",
         "Briefly describe biomodel 971 and simulate it for 50 days with an interval of 50.",
@@ -168,6 +189,22 @@ def sample_questions():
         "determine the Mpp concentration at the steady state."
     ]
     return questions
+
+def stream_response(response):
+    """
+    Function to stream the response from the agent.
+
+    Args:
+        response: dict: The response from the agent
+    """
+    for chunk in response:
+        # Stream only the AIMessageChunk
+        if not isinstance(chunk[0], AIMessageChunk):
+            continue
+        # print (chunk)
+        # Exclude the tool calls that are not part of the conversation
+        if 'branch:agent:should_continue:tools' not in chunk[1]['langgraph_triggers']:
+            yield chunk[0].content
 
 def get_response(app, st, prompt):
     # Create config for the agent
@@ -180,7 +217,7 @@ def get_response(app, st, prompt):
     )
     app.update_state(
         config,
-        {"llm_model": st.session_state.llm_model}
+        {"llm_model": get_base_chat_model(st.session_state.llm_model)}
     )
 
     ERROR_FLAG = False
@@ -188,12 +225,20 @@ def get_response(app, st, prompt):
         # Add Langsmith tracer
         tracer = LangChainTracer(project_name=st.session_state.project_name)
         # Get response from the agent
-        response = app.stream(
+        if current_state.values['llm_model']._llm_type == 'chat-nvidia-ai-playground':
+            response = app.invoke(
             {"messages": [HumanMessage(content=prompt)]},
             config=config|{"callbacks": [tracer]},
-            stream_mode="messages"
-        )
-        st.write_stream(stream_response(response))
+            # stream_mode="messages"
+            )
+            st.markdown(response["messages"][-1].content)
+        else:    
+            response = app.stream(
+                {"messages": [HumanMessage(content=prompt)]},
+                config=config|{"callbacks": [tracer]},
+                stream_mode="messages"
+            )
+            st.write_stream(stream_response(response))
         # print (cb.traced_runs)
         # Save the run id and use to save the feedback
         st.session_state.run_id = cb.traced_runs[-1].id
@@ -373,6 +418,92 @@ def get_response(app, st, prompt):
                     "tool_name": msg.name
                 })
 
+def render_graph(graph_dict: dict,
+                 key: str,
+                 save_graph: bool = False):
+    """
+    Function to render the graph in the chat.
+
+    Args:
+        graph_dict: The graph dictionary
+        key: The key for the graph
+        save_graph: Whether to save the graph in the chat history
+    """
+    # Create a directed graph
+    graph = nx.DiGraph()
+
+    # Add nodes with attributes
+    for node, attrs in graph_dict["nodes"]:
+        graph.add_node(node, **attrs)
+
+    # Add edges with attributes
+    for source, target, attrs in graph_dict["edges"]:
+        graph.add_edge(source, target, **attrs)
+
+    # Render the graph
+    fig = gravis.d3(
+            graph,
+            node_size_factor=3.0,
+            show_edge_label=True,
+            edge_label_data_source="label",
+            edge_curvature=0.25,
+            zoom_factor=1.0,
+            many_body_force_strength=-500,
+            many_body_force_theta=0.3,
+            node_hover_neighborhood=True,
+            # layout_algorithm_active=True,
+        )
+    components.html(fig.to_html(), height=475)
+
+    if save_graph:
+        # Add data to the chat history
+        st.session_state.messages.append({
+                "type": "graph",
+                "content": graph_dict,
+                "key": key,
+            })
+
+def get_text_embedding_model(model_name) -> Embeddings:
+    '''
+    Function to get the text embedding model.
+
+    Args:
+        model_name: str: The name of the model
+
+    Returns:
+        Embeddings: The text embedding model
+    '''
+    dic_text_embedding_models = {
+        "NVIDIA/llama-3.2-nv-embedqa-1b-v2": "nvidia/llama-3.2-nv-embedqa-1b-v2",
+        "OpenAI/text-embedding-ada-002": "text-embedding-ada-002"
+    }
+    if model_name.startswith("NVIDIA"):
+        return NVIDIAEmbeddings(model=dic_text_embedding_models[model_name])
+    return OpenAIEmbeddings(model=dic_text_embedding_models[model_name])
+
+def get_base_chat_model(model_name) -> BaseChatModel:
+    '''
+    Function to get the base chat model.
+
+    Args:
+        model_name: str: The name of the model
+
+    Returns:
+        BaseChatModel: The base chat model
+    '''
+    dic_llm_models = {
+        "NVIDIA/llama-3.3-70b-instruct": "meta/llama-3.3-70b-instruct",
+        "OpenAI/gpt-4o-mini": "gpt-4o-mini"
+    }
+    if model_name.startswith("Llama"):
+        return ChatOllama(model=dic_llm_models[model_name],
+                        temperature=0)
+    elif model_name.startswith("NVIDIA"):
+        return ChatNVIDIA(model=dic_llm_models[model_name],
+                        temperature=0)
+    return ChatOpenAI(model=dic_llm_models[model_name],
+                    temperature=0)
+
 @st.dialog("Warning ⚠️")
 def update_llm_model():
     """
@@ -394,6 +525,22 @@ def update_llm_model():
                 del st.session_state[key]
         st.rerun()
 
+def update_text_embedding_model(app):
+    """
+    Function to update the text embedding model.
+
+    Args:
+        app: The LangGraph app
+    """
+    config = {"configurable":
+                {"thread_id": st.session_state.unique_id}
+                }
+    app.update_state(
+        config,
+        {"text_embedding_model": get_text_embedding_model(
+            st.session_state.text_embedding_model)}
+    )
+
 @st.dialog("Get started with Talk2Biomodels 🚀")
 def help_button():
     """
@@ -405,9 +552,9 @@ modeling and simulations. I can assist with tasks such as:
 
 `Search models on Crohns disease`
 
-2. Extract information about models, including species, parameters, units, 
+2. Extract information about models, including species, parameters, units,
 name and descriptions.
-                
+
 `Show me the name of the model 537 and parameters related to drug dosage`
 
 3. Simulate models:
@@ -416,16 +563,125 @@ name and descriptions.
     - Specify which species/parameters you want to include and their starting concentrations.
     - Include recurring events.
 
-`Simulate the model for 2016 hours and intervals 2016 with an initial concentration 
+`Simulate the model for 2016 hours and intervals 2016 with an initial concentration
 of `DoseQ2W` set to 300 and `Dose` set to 0.`
 
 4. Answer questions about simulation results.
-                
+
 `What is the concentration of species IL6 in serum at time 1000?`
 
 5. Create custom plots to visualize the simulation results.
-                
+
 `Plot the concentration of all the interleukins over time`
 
 6. Provide feedback to the developers by clicking on the feedback button.
 ''')
+
+def apply_css():
+    """
+    Function to apply custom CSS for streamlit app.
+    """
+    # Styling using CSS
+    st.markdown(
+        """<style>
+        .stFileUploaderFile { display: none;}
+        #stFileUploaderPagination { display: none;}
+        .st-emotion-cache-wbtvu4 { display: none;}
+        </style>
+        """,
+        unsafe_allow_html=True
+        )
+
+def get_file_type_icon(file_type: str) -> str:
+    """
+    Function to get the icon for the file type.
+
+    Args:
+        file_type (str): The file type.
+
+    Returns:
+        str: The icon for the file type.
+    """
+    return {
+        "drug_data": "💊",
+        "endotype": "🧬",
+        "sbml_file": "📜"
+    }.get(file_type)
+
+@st.fragment
+def get_uploaded_files(cfg: hydra.core.config_store.ConfigStore) -> None:
+    """
+    Upload files to a directory set in cfg.upload_data_dir, and display them in the UI.
+
+    Args:
+        cfg: The configuration object.
+    """
+    # sbml_file = st.file_uploader("📜 Upload SBML file",
+    #     accept_multiple_files=False,
+    #     help='Upload an ODE model in SBML format.',
+    #     type=["xml", "sbml"],
+    #     key=f"uploader_sbml_file_{st.session_state.sbml_key}")
+
+    data_package_files = st.file_uploader(
+        "💊 Upload pre-clinical drug data",
+        help="Free-form text. Must contain atleast drug targets and kinetic parameters",
+        accept_multiple_files=True,
+        type=cfg.data_package_allowed_file_types,
+        key=f"uploader_{st.session_state.data_package_key}")
+
+    endotype_files = st.file_uploader(
+        "🧬 Upload endotype data",
+        help= "Free-form text. List of differentially expressed genes",
+        accept_multiple_files=True,
+        type=cfg.endotype_allowed_file_types,
+        key=f"uploader_endotype_{st.session_state.endotype_key}")
+
+    # Merge the uploaded files
+    uploaded_files = data_package_files.copy()
+    if endotype_files:
+        uploaded_files += endotype_files.copy()
+    # if sbml_file:
+    #     uploaded_files += [sbml_file]
+
+    with st.spinner("Storing uploaded file(s) ..."):
+        # for uploaded_file in data_package_files:
+        for uploaded_file in uploaded_files:
+            if uploaded_file.name not in [uf["file_name"]
+                                          for uf in st.session_state.uploaded_files]:
+                current_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                uploaded_file.file_name = uploaded_file.name
+                uploaded_file.file_path = f"{cfg.upload_data_dir}/{uploaded_file.file_name}"
+                uploaded_file.current_user = st.session_state.current_user
+                uploaded_file.timestamp = current_timestamp
+                if uploaded_file.name in [uf.name for uf in data_package_files]:
+                    uploaded_file.file_type = "drug_data"
+                elif uploaded_file.name in [uf.name for uf in endotype_files]:
+                    uploaded_file.file_type = "endotype"
+                else:
+                    uploaded_file.file_type = "sbml_file"
+                st.session_state.uploaded_files.append({
+                    "file_name": uploaded_file.file_name,
+                    "file_path": uploaded_file.file_path,
+                    "file_type": uploaded_file.file_type,
+                    "uploaded_by": uploaded_file.current_user,
+                    "uploaded_timestamp": uploaded_file.timestamp
+                })
+                with open(os.path.join(cfg.upload_data_dir, uploaded_file.file_name), "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                uploaded_file = None
+
+    # Display uploaded files and provide a remove button
+    for uploaded_file in st.session_state.uploaded_files:
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.write(get_file_type_icon(uploaded_file["file_type"]) + uploaded_file["file_name"])
+        with col2:
+            if st.button("🗑️", key=uploaded_file["file_name"]):
+                with st.spinner("Removing uploaded file ..."):
+                    if os.path.isfile(f"{cfg.upload_data_dir}/{uploaded_file['file_name']}"):
+                        os.remove(f"{cfg.upload_data_dir}/{uploaded_file['file_name']}")
+                    st.session_state.uploaded_files.remove(uploaded_file)
+                    st.cache_data.clear()
+                    st.session_state.data_package_key += 1
+                    st.session_state.endotype_key += 1
+                    st.rerun(scope="fragment")

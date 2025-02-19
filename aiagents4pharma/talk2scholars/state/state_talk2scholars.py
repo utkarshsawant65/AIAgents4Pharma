@@ -3,10 +3,9 @@ This is the state file for the talk2scholars agent.
 """
 
 import logging
-from typing import Annotated, Any, Dict, Optional
-
+from typing import Annotated,  Literal, Callable, Optional, Dict, Any, List
 from langgraph.prebuilt.chat_agent_executor import AgentState
-from typing_extensions import NotRequired, Required
+from langgraph.graph.message import add_messages
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -22,11 +21,16 @@ def replace_dict(existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any
 class Talk2Scholars(AgentState):
     """
     The state for the talk2scholars agent, inheriting from AgentState.
+
+    Attributes:
+        papers: Dictionary of papers from search results
+        multi_papers: Dictionary of papers from multi-paper recommendations
+        llm_model: Model being used
     """
 
-    papers: Annotated[Dict[str, Any], replace_dict]  # Changed from List to Dict
-    search_table: NotRequired[str]
-    next: str  # Required for routing in LangGraph
-    current_agent: NotRequired[Optional[str]]
-    is_last_step: Required[bool]  # Required field for LangGraph
-    llm_model: str
+    # Agent state fields
+
+    messages: Annotated[List[Any], add_messages]
+    papers: Dict[str, Any]
+    multi_papers: Dict[str, Any]
+    current_agent: Optional[str]
