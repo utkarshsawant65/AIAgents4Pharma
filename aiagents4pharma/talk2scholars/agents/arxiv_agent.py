@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-
+"""
+This module contains the arxiv_agent used for interacting with arXiv API
+to fetch paper metadata and PDFs for the Talk2Scholars project.
+"""
 import logging
 import hydra
 from langchain_openai import ChatOpenAI
 from langgraph.types import Command
 from langgraph.graph import START, StateGraph
-from langgraph.prebuilt import create_react_agent, ToolNode
+from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 from ..state.state_talk2scholars import Talk2Scholars
-from ..tools.arxiv.download_pdf_arxivX import fetch_arxiv_paper
+from ..tools.arxiv.download_pdf_arxivx import fetch_arxiv_paper
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,12 +40,15 @@ def agent_arxiv_node(state: Talk2Scholars):
 
 
 def get_app(thread_id, llm_model="gpt-4o-mini"):
+    
     with hydra.initialize(version_base=None, config_path="../../configs"):
         cfg = hydra.compose(
             config_name="config", overrides=["agents/talk2scholars/arxiv_agent=default"]
         )
         cfg = cfg.agents.talk2scholars.arxiv_agent
-
+    """
+    Returns the arXiv agent application for fetching papers.
+    """
     tools = ToolNode([fetch_arxiv_paper])
     llm = ChatOpenAI(model=llm_model, temperature=cfg.temperature)
 

@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-arxiv_paper_fetch: Tool for fetching an arXiv paper by its arXiv ID and returning the PDF as an object.
+arxiv_paper_fetch: Tool for fetching an arXiv paper by its arXiv ID and returning the PDF
+as an object.
 
-This tool interacts with the arXiv API to fetch metadata and download research papers
-as PDFs based on their unique arXiv ID.
+This tool interacts with the arXiv API to fetch metadata and download research papers as PDFs
+based on their unique arXiv ID.
 """
 
 import logging
-import requests
+from typing import Annotated,Any,Dict
 import xml.etree.ElementTree as ET
-from typing import Annotated, Any, Dict
+import requests
 import hydra
 from langchain_core.messages import ToolMessage
 from langchain_core.tools.base import InjectedToolCallId
@@ -21,6 +22,7 @@ from pydantic import BaseModel, Field
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 class FetchArxivPaperInput(BaseModel):
     """Input schema for the arXiv paper fetching tool."""
     arxiv_id: str = Field(
@@ -31,7 +33,10 @@ class FetchArxivPaperInput(BaseModel):
 
 # Use an absolute config path relative to this file's location.
 with hydra.initialize(version_base=None, config_path="../../configs"):
-    cfg = hydra.compose(config_name="config", overrides=["+tools/download_pdf_arxiv=default"])
+    cfg = hydra.compose(
+        config_name="config", 
+        overrides=["+tools/download_pdf_arxiv=default"]
+    )
     API_URL = cfg.tools.download_pdf_arxiv.api_url
     REQUEST_TIMEOUT = cfg.tools.download_pdf_arxiv.request_timeout
 
@@ -77,21 +82,25 @@ def fetch_arxiv_paper(arxiv_id: str, tool_call_id: str) -> Dict[str, Any]:
     pdf_response.raise_for_status()
 
     # Read the PDF data as binary chunks and join them.
-    pdf_data = b"".join(chunk for chunk in pdf_response.iter_content(chunk_size=1024) if chunk)
-    message = f"Successfully downloaded PDF for arXiv ID {arxiv_id} as an object."
+    pdf_data = b"".join(
+        chunk for chunk in pdf_response.iter_content(chunk_size=1024) if chunk
+    )
+    message = (
+        f"Successfully downloaded PDF for arXiv ID {arxiv_id} as an object."
+    )
     logger.info(message)
 
     return Command(
         update={
             "pdf_object": pdf_data,
-            "messages": [
-                ToolMessage(content=message, tool_call_id=tool_call_id)
-            ],
+            "messages": [ToolMessage(content=message, tool_call_id=tool_call_id)],
         }
     )
 
 
-def prepare_tool_input(filtered_papers: Dict[str, Any], paper_key: str, tool_call_id: str) -> Dict[str, str]:
+def prepare_tool_input(
+    filtered_papers: Dict[str, Any], paper_key: str, tool_call_id: str
+) -> Dict[str, str]:
     """
     Extracts the arXiv ID from the filtered papers state and prepares the input
     for the fetch_arxiv_paper tool.
@@ -106,5 +115,7 @@ def prepare_tool_input(filtered_papers: Dict[str, Any], paper_key: str, tool_cal
     """
     arxiv_id = filtered_papers.get(paper_key, {}).get("arXiv ID", None)
     if not arxiv_id or arxiv_id == "N/A":
-        raise ValueError(f"Invalid or missing arXiv ID for paper key: {paper_key}")
+        raise ValueError(
+            f"Invalid or missing arXiv ID for paper key: {paper_key}"
+        )
     return {"arxiv_id": arxiv_id, "tool_call_id": tool_call_id}
