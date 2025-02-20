@@ -34,7 +34,7 @@ class FetchArxivPaperInput(BaseModel):
 # Use an absolute config path relative to this file's location.
 with hydra.initialize(version_base=None, config_path="../../configs"):
     cfg = hydra.compose(
-        config_name="config", 
+        config_name="config",
         overrides=["+tools/download_pdf_arxiv=default"]
     )
     API_URL = cfg.tools.download_pdf_arxiv.api_url

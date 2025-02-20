@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-This tool is used to search for academic papers on Semantic Scholar, 
+This tool is used to search for academic papers on Semantic Scholar,
 including metadata such as title, abstract, year, citation count, URL, and arXiv ID.
 """
 
@@ -100,11 +100,8 @@ def search_tool(
         update={
             "papers": filtered_papers,  # Now sending the dictionary directly
             "messages": [
-                ToolMessage(
-                    content=f"Search Successful: {filtered_papers}",
-                    tool_call_id=tool_call_id
-                )
+                ToolMessage(content=f"Search Successful: {filtered_papers}",
+                tool_call_id=tool_call_id)
             ],
         }
     )
- 

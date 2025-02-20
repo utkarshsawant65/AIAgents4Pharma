@@ -3,7 +3,7 @@ This is the state file for the talk2scholars agent.
 """
 
 import logging
-from typing import Annotated,  Literal, Callable, Optional, Dict, Any, List
+from typing import Annotated, Optional, Dict, Any, List
 from langgraph.prebuilt.chat_agent_executor import AgentState
 from langgraph.graph.message import add_messages
 
