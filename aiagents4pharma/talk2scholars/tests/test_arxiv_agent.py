@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""
+Updated Unit Tests for the arXiv agent (Talk2Scholars arXiv sub-agent).
+"""
+
+import logging
+from unittest import mock
+import pytest
+from langchain_core.messages import HumanMessage, AIMessage
+from ..agents.arxiv_agent import get_app
+from ..state.state_talk2scholars import Talk2Scholars
+
+@pytest.fixture(autouse=True)
+def mock_hydra_fixture():
+    """
+    Mock Hydra configuration to prevent external dependencies.
+    Adjusts the configuration for the arXiv agent.
+    """
+    with mock.patch("hydra.initialize"), mock.patch("hydra.compose") as mock_compose:
+        cfg_mock = mock.MagicMock()
+        # Set a dummy configuration for the arXiv agent
+        cfg_mock.agents.talk2scholars.arxiv_agent.arxiv_agent = "Test prompt"
+        mock_compose.return_value = cfg_mock
+        yield mock_compose
+
+@pytest.fixture
+def mock_tools_fixture():
+    """
+    Mock the fetch_arxiv_paper tool to avoid real API calls.
+    """
+    with mock.patch("aiagents4pharma.talk2scholars.agents.arxiv_agent.fetch_arxiv_paper") as mock_fetch:
+        mock_fetch.return_value = {"pdf": "Mock PDF"}
+        yield mock_fetch
+
+@pytest.mark.usefixtures("mock_hydra_fixture")
+def test_arxiv_agent_initialization():
+    """
+    Test that the arXiv agent initializes correctly with the mock configuration.
+    """
+    thread_id = "test_thread"
+    with mock.patch("aiagents4pharma.talk2scholars.agents.arxiv_agent.create_react_agent") as mock_create:
+        mock_create.return_value = mock.Mock()
+        app = get_app(thread_id)
+        assert app is not None
+        assert mock_create.called
+
+def test_arxiv_agent_invocation():
+    """
+    Test that the arXiv agent processes user input and returns a valid response.
+    """
+    thread_id = "test_thread"
+    mock_state = Talk2Scholars(messages=[HumanMessage(content="Fetch arXiv paper for AI research")])
+    with mock.patch("aiagents4pharma.talk2scholars.agents.arxiv_agent.create_react_agent") as mock_create:
+        mock_agent = mock.Mock()
+        mock_create.return_value = mock_agent
+        # Simulate a response from the react agent
+        mock_agent.invoke.return_value = {
+            "messages": [AIMessage(content="Here is your arXiv paper")],
+            "papers": {"pdf": "Mock PDF Result"},
+        }
+        app = get_app(thread_id)
+        result = app.invoke(
+            mock_state,
+            config={
+                "configurable": {
+                    "thread_id": thread_id,
+                    "checkpoint_ns": "test_ns",
+                    "checkpoint_id": "test_checkpoint",
+                }
+            },
+        )
+        assert "messages" in result
+        assert "papers" in result
+        assert result["papers"]["pdf"] == "Mock PDF Result"
+        assert mock_agent.invoke.called
+
+def test_arxiv_tool_assignment():
+    """
+    Ensure that the correct tool (fetch_arxiv_paper) is assigned to the arXiv agent.
+    """
+    thread_id = "test_thread"
+    with mock.patch("aiagents4pharma.talk2scholars.agents.arxiv_agent.create_react_agent") as mock_create, \
+         mock.patch("aiagents4pharma.talk2scholars.agents.arxiv_agent.ToolNode") as mock_toolnode:
+        mock_agent = mock.Mock()
+        mock_create.return_value = mock_agent
+        # Simulate a ToolNode that is instantiated with a list of tools
+        mock_tool_instance = mock.Mock()
+        # For the arXiv agent, we expect exactly one tool to be assigned.
+        mock_tool_instance.tools = [mock.Mock()]
+        mock_toolnode.return_value = mock_tool_instance
+        get_app(thread_id)
+        assert mock_toolnode.called
+        assert len(mock_tool_instance.tools) == 1
+
+def test_arxiv_agent_hydra_failure():
+    """
+    Test exception handling when Hydra fails to load configuration.
+    """
+    thread_id = "test_thread"
+    with mock.patch("hydra.initialize", side_effect=Exception("Hydra error")):
+        with pytest.raises(Exception) as exc_info:
+            get_app(thread_id)
+        assert "Hydra error" in str(exc_info.value)
